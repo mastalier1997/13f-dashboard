@@ -1,0 +1,20 @@
+# Daily EDGAR → Supabase ingestion. Also doubles as the keep-alive ping that
+# stops Supabase pausing the free-tier project after 7 idle days.
+name: ingest-13f
+on:
+  schedule: [{ cron: '0 6 * * *' }]   # daily 06:00 UTC
+  workflow_dispatch: {}                # lets you run it manually
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm ci
+      - run: node scripts/ingest.js
+        env:
+          # service_role key — set in GitHub repo secrets, never in the frontend
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
