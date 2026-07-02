@@ -27,8 +27,22 @@ to Postgres.
 | `supabase/seed.sql` | Starter fund list (complete it from `SEED_FUNDS` in `App.jsx`) |
 | `scripts/ingest.js` | EDGAR → Supabase ingestion job |
 | `.github/workflows/ingest.yml` | Daily cron (06:00 UTC) + manual trigger |
-| `src/data.js` | Supabase data layer the React app imports |
+| `src/App.jsx` | React frontend: fund list, quarter selector, stat tiles, holdings table, QoQ diff, add-fund flow |
+| `src/mock.js` | Mock data layer (deterministic portfolios) — the app runs on it with zero setup |
+| `src/data.js` | Supabase data layer (same interface as the mock) |
+| `src/api.js` | Auto-switch: Supabase when `VITE_SUPABASE_URL` is set, otherwise mock |
 | `BACKLOG.md` | Feature backlog |
+
+## Run the frontend
+
+```bash
+npm install
+npm run dev        # mock data, no configuration needed
+```
+
+To point it at a real Supabase project, copy `.env.example` to `.env.local`
+and fill in `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` — the app switches
+off mock data automatically.
 
 ## Setup
 
@@ -46,9 +60,8 @@ to Postgres.
    # real run:
    SUPABASE_URL=... SUPABASE_SERVICE_KEY=... npm run ingest
    ```
-4. **Frontend**: scaffold Vite (`npm create vite@latest . -- --template react`),
-   drop `App.jsx` into `src/`, replace its mock DATA LAYER with imports from
-   `src/data.js`, and create `.env.local` from `.env.example` (anon key only).
+4. **Frontend**: create `.env.local` from `.env.example` (anon key only) and
+   the app switches from mock to live data automatically.
 
 ## Supabase MCP (optional, for Claude Code)
 

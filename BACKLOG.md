@@ -38,24 +38,27 @@ Ordered by priority within each milestone.
 - [ ] Add `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` to GitHub repo secrets (service_role key — never in the frontend).
 - Doubles as the keep-alive ping that stops Supabase pausing the project after 7 idle days.
 
-### 1.5 Swap the frontend data layer 🔶 (scaffolded in `src/data.js`)
-- [x] `getFunds`, `getFilings`, `getHoldings`, `addFund` implemented against Supabase.
-- [ ] Add `App.jsx` to this repo and replace its mock DATA LAYER block with imports from `src/data.js`.
-- [ ] Create `.env.local` with `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`.
+### 1.5 Frontend data layer 🔶
+- [x] `getFunds`, `getFilings`, `getHoldings`, `addFund` implemented against Supabase (`src/data.js`).
+- [x] Mock layer with the same interface (`src/mock.js`) + auto-switch (`src/api.js`): the app
+  uses Supabase when `VITE_SUPABASE_URL` is set, mock data otherwise.
+- [ ] Create `.env.local` with `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` to go live.
 
-### 1.6 Vite app scaffold & deploy 🔲
-- `npm create vite@latest` (React template), drop `App.jsx` into `src/`.
-- Deploy free on Vercel / Netlify / Cloudflare Pages.
+### 1.6 React frontend & deploy 🔶
+- [x] Vite + React app built from scratch (`src/App.jsx`): fund list sidebar with search,
+  quarter selector, stat tiles, holdings table with value bars, QoQ changes view,
+  add-fund-by-CIK flow. Runs on mock data with zero setup (`npm run dev`).
+- [ ] Deploy free on Vercel / Netlify / Cloudflare Pages.
 
 ---
 
 ## Milestone 2 — Product hardening
 
-### 2.1 "Awaiting first sync" state for newly added funds 🔲
-- A fund added via the UI has no holdings until the next ingest run.
-- Show a pending state, or trigger a one-off ingest for the new CIK (e.g. `workflow_dispatch` with a CIK input).
+### 2.1 "Awaiting first sync" state for newly added funds 🔶
+- [x] UI shows a pending state for funds with no filings yet.
+- [ ] Trigger a one-off ingest for a newly added CIK (e.g. `workflow_dispatch` with a CIK input).
 
-### 2.2 Data caveats surfaced in the UI 🔲
+### 2.2 Data caveats surfaced in the UI ✅ (footer note on every fund view)
 - 13F is filed up to 45 days after quarter-end → data can be ~5 months stale.
 - Long US equities only — no shorts, options detail, cash, bonds, non-US holdings.
 - SEC does not verify 13F accuracy: "as reported, not audited".

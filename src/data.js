@@ -6,13 +6,19 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-const sb = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-);
+// Lazy so this module can be imported without Supabase env vars
+// (src/api.js falls back to the mock layer in that case).
+let _sb;
+function client() {
+  _sb ??= createClient(
+    import.meta.env.VITE_SUPABASE_URL,
+    import.meta.env.VITE_SUPABASE_ANON_KEY
+  );
+  return _sb;
+}
 
 export async function getFunds() {
-  const { data, error } = await sb
+  const { data, error } = await client()
     .from('funds')
     .select('cik,name,manager,custom')
     .order('name');
@@ -21,7 +27,7 @@ export async function getFunds() {
 }
 
 export async function getFilings(cik) {
-  const { data, error } = await sb
+  const { data, error } = await client()
     .from('filings')
     .select('quarter,filed_date,period_end')
     .eq('cik', cik)
@@ -31,14 +37,14 @@ export async function getFilings(cik) {
 }
 
 export async function getHoldings(cik, quarter) {
-  const { data: filing, error: filingError } = await sb
+  const { data: filing, error: filingError } = await client()
     .from('filings')
     .select('id')
     .eq('cik', cik)
     .eq('quarter', quarter)
     .single();
   if (filingError) throw filingError;
-  const { data, error } = await sb
+  const { data, error } = await client()
     .from('holdings')
     .select('ticker,name,shares,value')
     .eq('filing_id', filing.id)
@@ -49,7 +55,7 @@ export async function getHoldings(cik, quarter) {
 
 export async function addFund({ cik, name, manager }) {
   const clean = cik.replace(/\D/g, '').padStart(10, '0');
-  const { data, error } = await sb
+  const { data, error } = await client()
     .from('funds')
     .insert({ cik: clean, name, manager, custom: true })
     .select()
