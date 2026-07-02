@@ -1,0 +1,14 @@
+{
+  "name": "13f-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "ingest": "node scripts/ingest.js",
+    "ingest:dry-run": "node scripts/ingest.js --dry-run"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.0",
+    "fast-xml-parser": "^4.5.0"
+  }
+}
