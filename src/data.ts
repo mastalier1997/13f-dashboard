@@ -1,17 +1,41 @@
 // Supabase data layer for the React app.
 //
-// App.jsx already awaits these four functions (see its DATA LAYER block) —
-// import from here and delete the mock implementations; nothing else in the
-// component changes.
+// App.tsx imports these four functions — see its DATA LAYER usage.
 
 import { createClient } from '@supabase/supabase-js';
+
+export interface Fund {
+  cik: string;
+  name: string;
+  manager: string | null;
+  custom: boolean;
+}
+
+export interface Filing {
+  cik: string;
+  quarter: string;
+  filedDate: string | null;
+}
+
+export interface Holding {
+  ticker: string | null;
+  name: string | null;
+  shares: number;
+  value: number;
+}
+
+export interface NewFund {
+  cik: string;
+  name: string;
+  manager: string;
+}
 
 const sb = createClient(
   import.meta.env.VITE_SUPABASE_URL,
   import.meta.env.VITE_SUPABASE_ANON_KEY
 );
 
-export async function getFunds() {
+export async function getFunds(): Promise<Fund[]> {
   const { data, error } = await sb
     .from('funds')
     .select('cik,name,manager,custom')
@@ -20,7 +44,7 @@ export async function getFunds() {
   return data;
 }
 
-export async function getFilings(cik) {
+export async function getFilings(cik: string): Promise<Filing[]> {
   const { data, error } = await sb
     .from('filings')
     .select('quarter,filed_date,period_end')
@@ -30,7 +54,7 @@ export async function getFilings(cik) {
   return data.map((f) => ({ cik, quarter: f.quarter, filedDate: f.filed_date }));
 }
 
-export async function getHoldings(cik, quarter) {
+export async function getHoldings(cik: string, quarter: string): Promise<Holding[]> {
   const { data: filing, error: filingError } = await sb
     .from('filings')
     .select('id')
@@ -47,7 +71,7 @@ export async function getHoldings(cik, quarter) {
   return data;
 }
 
-export async function addFund({ cik, name, manager }) {
+export async function addFund({ cik, name, manager }: NewFund): Promise<Fund> {
   const clean = cik.replace(/\D/g, '').padStart(10, '0');
   const { data, error } = await sb
     .from('funds')

@@ -1,13 +1,13 @@
 # 13f-dashboard
 
-A personal 13F holdings tracker. React frontend, Supabase (Postgres) backend,
-SEC EDGAR as the free data source. See **[BACKLOG.md](BACKLOG.md)** for the
-prioritized feature backlog.
+A personal 13F holdings tracker. React + TypeScript frontend (Vite, Tailwind),
+Supabase (Postgres) backend, SEC EDGAR as the free data source. See
+**[BACKLOG.md](BACKLOG.md)** for the prioritized feature backlog.
 
 ```
   SEC EDGAR (free)                Supabase (Postgres)            React app
  ┌────────────────┐   ingest    ┌────────────────────┐  query  ┌──────────────┐
- │ submissions API │ ─────────▶ │  funds             │ ◀────── │  src/data.js │
+ │ submissions API │ ─────────▶ │  funds             │ ◀────── │  src/data.ts │
  │ 13F XML tables  │   (cron)   │  filings           │  REST/  │              │
  │                 │            │  holdings          │  client │              │
  └────────────────┘            └────────────────────┘         └──────────────┘
@@ -24,16 +24,17 @@ to Postgres.
 | `supabase/migrations/0001_schema.sql` | Tables: `funds`, `filings`, `holdings` + indexes |
 | `supabase/migrations/0002_grants.sql` | Data API grants (needed for projects created after 2026-05-30) |
 | `supabase/migrations/0003_rls.sql` | Row Level Security + public-read policies |
-| `supabase/seed.sql` | Starter fund list (complete it from `SEED_FUNDS` in `App.jsx`) |
-| `scripts/ingest.js` | EDGAR → Supabase ingestion job |
+| `supabase/seed.sql` | Starter fund list |
+| `scripts/ingest.ts` | EDGAR → Supabase ingestion job (run via `tsx`) |
 | `.github/workflows/ingest.yml` | Daily cron (06:00 UTC) + manual trigger |
-| `src/data.js` | Supabase data layer the React app imports |
+| `src/data.ts` | Supabase data layer the React app imports |
+| `src/App.tsx` | Fund list → filings → holdings dashboard UI |
 | `BACKLOG.md` | Feature backlog |
 
 ## Setup
 
-1. **Supabase**: create a project at supabase.com, then run the three files in
-   `supabase/migrations/` (in order) and `supabase/seed.sql` in the SQL Editor.
+1. **Supabase**: `npx supabase login`, then `npx supabase link --project-ref <ref>`
+   and `npx supabase db push --include-seed` to apply the 3 migrations + seed data.
 2. **GitHub secrets** (repo → Settings → Secrets → Actions):
    `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` (service_role — never in the frontend),
    `SEC_USER_AGENT` (e.g. `13f-dashboard you@example.com`).
@@ -46,9 +47,9 @@ to Postgres.
    # real run:
    SUPABASE_URL=... SUPABASE_SERVICE_KEY=... npm run ingest
    ```
-4. **Frontend**: scaffold Vite (`npm create vite@latest . -- --template react`),
-   drop `App.jsx` into `src/`, replace its mock DATA LAYER with imports from
-   `src/data.js`, and create `.env.local` from `.env.example` (anon key only).
+4. **Frontend**: create `.env.local` from `.env.example` (anon key only —
+   `npx supabase projects api-keys --project-ref <ref>` prints it), then
+   `npm install && npm run dev`.
 
 ## Supabase MCP (optional, for Claude Code)
 

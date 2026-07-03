@@ -11,10 +11,42 @@
 //   SEC_USER_AGENT        e.g. "my-13f-tracker me@example.com" (SEC blocks without it)
 //
 // Dry run (no Supabase writes, parses one CIK and prints the result):
-//   node scripts/ingest.js --dry-run 0001067983
+//   npm run ingest:dry-run -- 0001067983
+//
+// Limit how many filings back to pull per fund (default: all available):
+//   npm run ingest -- --limit 5
 
 import { createClient } from '@supabase/supabase-js';
 import { XMLParser } from 'fast-xml-parser';
+
+interface ThirteenF {
+  form: string;
+  accession: string;
+  periodEnd: string;
+  filedDate: string;
+}
+
+interface InfoTableRow {
+  cusip?: string;
+  nameOfIssuer?: string;
+  shrsOrPrnAmt?: { sshPrnamt?: number };
+  value?: number | string;
+}
+
+interface EdgarSubmissions {
+  filings: {
+    recent: {
+      form: string[];
+      accessionNumber: string[];
+      reportDate: string[];
+      filingDate: string[];
+    };
+  };
+}
+
+interface EdgarDirectoryIndex {
+  directory: { item: { name: string }[] };
+}
 
 const UA = {
   'User-Agent': process.env.SEC_USER_AGENT ?? '13f-dashboard jan.mastalier@gmail.com',
@@ -22,9 +54,9 @@ const UA = {
 
 // SEC asks for <10 req/s; stay well under it.
 const REQUEST_DELAY_MS = 250;
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function edgarFetch(url) {
+async function edgarFetch(url: string): Promise<Response> {
   await sleep(REQUEST_DELAY_MS);
   const res = await fetch(url, { headers: UA });
   if (!res.ok) throw new Error(`EDGAR ${res.status} for ${url}`);
@@ -32,26 +64,26 @@ async function edgarFetch(url) {
 }
 
 // '2025-03-31' -> 'Q1 2025'
-function toQuarterLabel(periodEnd) {
+function toQuarterLabel(periodEnd: string): string {
   const [year, month] = periodEnd.split('-').map(Number);
   return `Q${Math.ceil(month / 3)} ${year}`;
 }
 
 // Filings before 2023 report `value` in thousands of dollars; newer ones in
 // whole dollars. Normalize everything to whole dollars or be off by 1000×.
-function normalizeValue(rawValue, filedDate) {
+function normalizeValue(rawValue: number | string | undefined, filedDate: string): number {
   const v = Number(rawValue) || 0;
   return filedDate < '2023-01-01' ? v * 1000 : v;
 }
 
 // The holdings live in an XML information table inside the filing folder.
 // The folder index tells us which file it is (name varies by filer).
-async function fetchInfoTable(cik, accession) {
+async function fetchInfoTable(cik: string, accession: string): Promise<InfoTableRow[]> {
   const cikNum = String(Number(cik)); // folder path uses the unpadded CIK
   const accPlain = accession.replace(/-/g, '');
   const base = `https://www.sec.gov/Archives/edgar/data/${cikNum}/${accPlain}`;
 
-  const index = await edgarFetch(`${base}/index.json`).then((r) => r.json());
+  const index: EdgarDirectoryIndex = await edgarFetch(`${base}/index.json`).then((r) => r.json());
   const files = index.directory.item.map((i) => i.name);
   const infoTableFile =
     files.find((n) => /infotable|information_table|form13f/i.test(n) && n.endsWith('.xml')) ??
@@ -65,18 +97,18 @@ async function fetchInfoTable(cik, accession) {
     parseTagValue: false, // keep CUSIPs as strings — auto-numbering drops leading zeros
   }).parse(xml);
 
-  const table = parsed.informationTable?.infoTable ?? [];
+  const table: InfoTableRow[] | InfoTableRow = parsed.informationTable?.infoTable ?? [];
   return Array.isArray(table) ? table : [table]; // single-holding filings parse as an object
 }
 
 // One row per 13F-HR / 13F-HR/A in the filer's recent submissions.
-async function listThirteenFs(cik) {
-  const subs = await edgarFetch(
+async function listThirteenFs(cik: string): Promise<ThirteenF[]> {
+  const subs: EdgarSubmissions = await edgarFetch(
     `https://data.sec.gov/submissions/CIK${cik}.json`
   ).then((r) => r.json());
 
   const recent = subs.filings.recent;
-  const out = [];
+  const out: ThirteenF[] = [];
   for (let i = 0; i < recent.form.length; i++) {
     const form = recent.form[i];
     if (form !== '13F-HR' && form !== '13F-HR/A') continue;
@@ -90,8 +122,13 @@ async function listThirteenFs(cik) {
   return out;
 }
 
-async function ingestFund(sb, cik) {
-  for (const f of await listThirteenFs(cik)) {
+async function ingestFund(
+  sb: ReturnType<typeof createClient>,
+  cik: string,
+  limit?: number
+): Promise<void> {
+  const filings = await listThirteenFs(cik); // newest-first per EDGAR's submissions API
+  for (const f of limit ? filings.slice(0, limit) : filings) {
     // Skip if we already have this exact filing:
     const { data: existing } = await sb
       .from('filings')
@@ -145,7 +182,7 @@ async function ingestFund(sb, cik) {
   }
 }
 
-async function dryRun(cik) {
+async function dryRun(cik: string): Promise<void> {
   const filings = await listThirteenFs(cik);
   console.log(`CIK ${cik}: ${filings.length} 13F filings found`);
   if (!filings.length) return;
@@ -161,7 +198,7 @@ async function dryRun(cik) {
   }
 }
 
-async function main() {
+async function main(): Promise<void> {
   const dryIdx = process.argv.indexOf('--dry-run');
   if (dryIdx !== -1) {
     const cik = (process.argv[dryIdx + 1] ?? '0001067983').replace(/\D/g, '').padStart(10, '0');
@@ -174,16 +211,19 @@ async function main() {
   }
   const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
+  const limitIdx = process.argv.indexOf('--limit');
+  const limit = limitIdx !== -1 ? Number(process.argv[limitIdx + 1]) : undefined;
+
   const { data: funds, error } = await sb.from('funds').select('cik,name');
   if (error) throw error;
 
   let failures = 0;
   for (const fund of funds) {
     try {
-      await ingestFund(sb, fund.cik);
+      await ingestFund(sb, fund.cik, limit);
     } catch (e) {
       failures++;
-      console.error(`FAILED ${fund.cik} (${fund.name}): ${e.message}`);
+      console.error(`FAILED ${fund.cik} (${fund.name}): ${e instanceof Error ? e.message : e}`);
     }
   }
   if (failures) process.exit(1);
