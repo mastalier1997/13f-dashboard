@@ -6,3 +6,7 @@ dist/
 *.log
 .DS_Store
 supabase/.temp/
+.agents/
+.claude/
+.mcp.json
+skills-lock.json
