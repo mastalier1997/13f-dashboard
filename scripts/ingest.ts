@@ -16,7 +16,7 @@
 // Limit how many filings back to pull per fund (default: all available):
 //   npm run ingest -- --limit 5
 
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { XMLParser } from 'fast-xml-parser';
 
 interface ThirteenF {
@@ -76,13 +76,33 @@ function normalizeValue(rawValue: number | string | undefined, filedDate: string
   return filedDate < '2023-01-01' ? v * 1000 : v;
 }
 
+// Filing folder URL; the path uses the unpadded CIK and dash-less accession.
+const filingFolder = (cik: string, accession: string) =>
+  `https://www.sec.gov/Archives/edgar/data/${String(Number(cik))}/${accession.replace(/-/g, '')}`;
+
+type AmendmentType = 'restatement' | 'new-holdings';
+
+// A 13F-HR/A either restates the entire information table or only adds
+// previously-omitted (confidential) positions; the primary doc says which.
+// Treating an additions-only amendment as a restatement would wipe the real
+// portfolio (e.g. Berkshire Q1 2025: a 4-position amendment vs $257B filed).
+async function fetchAmendmentType(cik: string, accession: string): Promise<AmendmentType> {
+  const base = filingFolder(cik, accession);
+  const index: EdgarDirectoryIndex = await edgarFetch(`${base}/index.json`).then((r) => r.json());
+  const primaryDoc = index.directory.item
+    .map((i) => i.name)
+    .find((n) => /primary_doc.*\.xml$/i.test(n));
+  if (!primaryDoc) return 'restatement'; // unknown → old behavior (replace)
+
+  const xml = await edgarFetch(`${base}/${primaryDoc}`).then((r) => r.text());
+  const declared = xml.match(/<amendmentType>([^<]*)</i)?.[1] ?? '';
+  return /new\s*holdings/i.test(declared) ? 'new-holdings' : 'restatement';
+}
+
 // The holdings live in an XML information table inside the filing folder.
 // The folder index tells us which file it is (name varies by filer).
 async function fetchInfoTable(cik: string, accession: string): Promise<InfoTableRow[]> {
-  const cikNum = String(Number(cik)); // folder path uses the unpadded CIK
-  const accPlain = accession.replace(/-/g, '');
-  const base = `https://www.sec.gov/Archives/edgar/data/${cikNum}/${accPlain}`;
-
+  const base = filingFolder(cik, accession);
   const index: EdgarDirectoryIndex = await edgarFetch(`${base}/index.json`).then((r) => r.json());
   const files = index.directory.item.map((i) => i.name);
   const infoTableFile =
@@ -122,63 +142,145 @@ async function listThirteenFs(cik: string): Promise<ThirteenF[]> {
   return out;
 }
 
+interface HoldingLot {
+  cusip: string | null;
+  name?: string;
+  shares: number;
+  value: number;
+}
+
+// Filers report one row per manager/discretion split, so one security can
+// appear as several lots sharing a CUSIP. Group to one row per security.
+function groupLots(infoTable: InfoTableRow[], filedDate: string): HoldingLot[] {
+  const byKey = new Map<string, HoldingLot>();
+  for (const h of infoTable) {
+    const cusip = h.cusip ? String(h.cusip) : null;
+    const key = cusip ?? h.nameOfIssuer ?? '?';
+    const shares = Number(h.shrsOrPrnAmt?.sshPrnamt ?? 0);
+    const value = normalizeValue(h.value, filedDate);
+    const lot = byKey.get(key);
+    if (lot) {
+      lot.shares += shares;
+      lot.value += value;
+    } else {
+      byKey.set(key, { cusip, name: h.nameOfIssuer, shares, value });
+    }
+  }
+  return [...byKey.values()];
+}
+
+async function insertHoldings(
+  sb: SupabaseClient,
+  filingId: number,
+  lots: HoldingLot[]
+): Promise<void> {
+  const rows = lots.map((lot) => ({ ...lot, filing_id: filingId }));
+  for (let i = 0; i < rows.length; i += 500) {
+    const { error } = await sb.from('holdings').insert(rows.slice(i, i + 500));
+    if (error) throw error;
+  }
+}
+
+async function ingestFiling(
+  sb: SupabaseClient,
+  cik: string,
+  f: ThirteenF,
+  allFilings: ThirteenF[]
+): Promise<void> {
+  // Skip if we already have this exact filing:
+  const { data: existing } = await sb
+    .from('filings')
+    .select('id')
+    .eq('accession_no', f.accession)
+    .maybeSingle();
+  if (existing) return;
+
+  const quarter = toQuarterLabel(f.periodEnd);
+  const isAmendment = f.form === '13F-HR/A';
+  const amendmentType = isAmendment ? await fetchAmendmentType(cik, f.accession) : null;
+
+  // An additions-only amendment needs its original on record to merge into —
+  // the original may sit outside --limit, so pull it in explicitly.
+  if (amendmentType === 'new-holdings') {
+    const { data: sp } = await sb
+      .from('filings')
+      .select('id')
+      .eq('cik', cik)
+      .eq('quarter', quarter)
+      .maybeSingle();
+    if (!sp) {
+      const original = allFilings.find(
+        (o) => o.form === '13F-HR' && o.periodEnd === f.periodEnd && o.filedDate <= f.filedDate
+      );
+      if (original) await ingestFiling(sb, cik, original, allFilings);
+    }
+  }
+
+  const { data: samePeriod } = await sb
+    .from('filings')
+    .select('id, filed_date')
+    .eq('cik', cik)
+    .eq('quarter', quarter)
+    .maybeSingle();
+
+  // Keep the latest data for a (cik, quarter). Ties go to amendments — an
+  // amendment filed the same day as the original still supersedes it.
+  if (samePeriod) {
+    const storedIsNewer =
+      samePeriod.filed_date > f.filedDate ||
+      (!isAmendment && samePeriod.filed_date === f.filedDate);
+    if (storedIsNewer) return;
+  }
+
+  const lots = groupLots(await fetchInfoTable(cik, f.accession), f.filedDate);
+
+  if (samePeriod && amendmentType === 'new-holdings') {
+    // Merge the previously-omitted positions into the stored filing. Record
+    // the amendment's accession so it isn't merged twice; keep the original
+    // filed_date so the original filing stays recognized as ingested.
+    // ponytail: assumes no CUSIP overlap between original and NEW HOLDINGS
+    // amendment (SEC semantics); overlapping rows would need summing here.
+    await insertHoldings(sb, samePeriod.id as number, lots);
+    const { error } = await sb
+      .from('filings')
+      .update({ accession_no: f.accession })
+      .eq('id', samePeriod.id);
+    if (error) throw error;
+    console.log(`${cik} ${quarter}: +${lots.length} holdings merged (${f.form} ${f.accession})`);
+    return;
+  }
+
+  if (samePeriod) {
+    await sb.from('filings').delete().eq('id', samePeriod.id); // cascades to holdings
+  }
+
+  const { data: filing, error } = await sb
+    .from('filings')
+    .insert({
+      cik,
+      quarter,
+      period_end: f.periodEnd,
+      filed_date: f.filedDate,
+      accession_no: f.accession,
+    })
+    .select()
+    .single();
+  if (error) throw error;
+
+  await insertHoldings(sb, filing.id as number, lots);
+  console.log(`${cik} ${quarter}: ${lots.length} holdings (${f.form} ${f.accession})`);
+}
+
 async function ingestFund(
-  sb: ReturnType<typeof createClient>,
+  sb: SupabaseClient,
   cik: string,
   limit?: number
 ): Promise<void> {
   const filings = await listThirteenFs(cik); // newest-first per EDGAR's submissions API
-  for (const f of limit ? filings.slice(0, limit) : filings) {
-    // Skip if we already have this exact filing:
-    const { data: existing } = await sb
-      .from('filings')
-      .select('id')
-      .eq('accession_no', f.accession)
-      .maybeSingle();
-    if (existing) continue;
-
-    const quarter = toQuarterLabel(f.periodEnd);
-
-    // Amendments (13F-HR/A) restate a period. Prefer the latest filing for a
-    // given (cik, quarter): replace an older filing, skip if ours is older.
-    const { data: samePeriod } = await sb
-      .from('filings')
-      .select('id, filed_date')
-      .eq('cik', cik)
-      .eq('quarter', quarter)
-      .maybeSingle();
-    if (samePeriod) {
-      if (samePeriod.filed_date >= f.filedDate) continue;
-      await sb.from('filings').delete().eq('id', samePeriod.id); // cascades to holdings
-    }
-
-    const infoTable = await fetchInfoTable(cik, f.accession);
-
-    const { data: filing, error } = await sb
-      .from('filings')
-      .insert({
-        cik,
-        quarter,
-        period_end: f.periodEnd,
-        filed_date: f.filedDate,
-        accession_no: f.accession,
-      })
-      .select()
-      .single();
-    if (error) throw error;
-
-    const rows = infoTable.map((h) => ({
-      filing_id: filing.id,
-      cusip: h.cusip ? String(h.cusip) : null,
-      name: h.nameOfIssuer,
-      shares: Number(h.shrsOrPrnAmt?.sshPrnamt ?? 0),
-      value: normalizeValue(h.value, f.filedDate),
-    }));
-    for (let i = 0; i < rows.length; i += 500) {
-      const { error: insErr } = await sb.from('holdings').insert(rows.slice(i, i + 500));
-      if (insErr) throw insErr;
-    }
-    console.log(`${cik} ${quarter}: ${rows.length} holdings (${f.form} ${f.accession})`);
+  const chosen = limit ? filings.slice(0, limit) : filings;
+  // Oldest → newest so originals land before the amendments that patch them.
+  for (const f of [...chosen].reverse()) {
+    await ingestFiling(sb, cik, f, filings);
   }
 }
 

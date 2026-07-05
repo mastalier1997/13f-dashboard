@@ -1,3 +1,26 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Chart palette — validated reference palette from the dataviz method.
+   Dark values are that palette's dark-surface steps, not an automatic flip. */
+:root {
+  --series-1: #2a78d6;
+  --series-2: #1baf7a;
+  --series-3: #eda100;
+  --series-4: #008300;
+  --series-5: #4a3aa7;
+  --series-6: #e34948;
+  --viz-grid: #e1e0d9;
+  --viz-axis: #898781;
+}
+.dark {
+  --series-1: #3987e5;
+  --series-2: #199e70;
+  --series-3: #c98500;
+  --series-4: #008300;
+  --series-5: #9085e9;
+  --series-6: #e66767;
+  --viz-grid: #2c2c2a;
+  --viz-axis: #898781;
+}
