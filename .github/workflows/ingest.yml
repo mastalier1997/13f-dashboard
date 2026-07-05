@@ -12,7 +12,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
       - run: npm ci
-      - run: node scripts/ingest.js
+      - run: npm run ingest
         env:
           # service_role key — set in GitHub repo secrets, never in the frontend
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
