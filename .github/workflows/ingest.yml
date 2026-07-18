@@ -2,7 +2,7 @@
 # stops Supabase pausing the free-tier project after 7 idle days.
 name: ingest-13f
 on:
-  schedule: [{ cron: '0 6 * * *' }]   # daily 06:00 UTC
+  schedule: [{ cron: '0 5 */2 * *' }]   # runs every 2 days
   workflow_dispatch: {}                # lets you run it manually
 jobs:
   ingest:
